@@ -17,6 +17,13 @@ echo "✅ Docker image built successfully: ${IMAGE_NAME}:${DOCKER_TAG}"
 
 echo "🔨 Building Nitro Enclave image (.eif)..."
 
+# Check if EIF file already exists and remove it
+if [ -f "${EIF_NAME}" ]; then
+    echo "🗑️  Removing existing EIF file: ${EIF_NAME}"
+    rm -f "${EIF_NAME}"
+    echo "✅ Old EIF file removed"
+fi
+
 # Build the enclave image file
 nitro-cli build-enclave \
     --docker-uri "${IMAGE_NAME}:${DOCKER_TAG}" \

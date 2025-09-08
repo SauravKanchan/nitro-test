@@ -6,7 +6,7 @@ cryptography>=41.0.0
 cbor2>=5.4.0
 
 # Parent-side dependencies (for verifier.py)
-python-cose>=1.2.0
+cose>=1.2.0
 cryptography>=41.0.0
 cbor2>=5.4.0
 
@@ -23,7 +23,7 @@ pytest-cov>=4.0.0
 #   pip install aws-nsm-interface cryptography cbor2
 #
 # For parent instance:
-#   pip install python-cose cryptography cbor2 pytest pytest-cov
+#   pip install cose cryptography cbor2 pytest pytest-cov
 #
 # For development (both):
 #   pip install -r requirements.txt

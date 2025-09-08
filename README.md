@@ -22,7 +22,7 @@ This project implements Python code to generate and verify AWS Nitro Enclaves at
 
 **On parent instance:**
 ```bash
-pip install python-cose cryptography cbor2 pytest
+pip install cose cryptography cbor2 pytest
 ```
 
 **For enclave image (in Dockerfile):**

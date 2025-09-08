@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+"""
+Attestation document verifier for AWS Nitro Enclaves.
+This runs on the parent instance to verify attestation documents.
+"""
+
+import base64
+import datetime
+import sys
+from typing import Dict, List, Any, Tuple, Optional
+import cbor2
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.base import Certificate
+from cose.messages import Sign1Message
+from cose.keys import CoseKey
+from cose.algorithms import Es384
+
+
+# AWS Nitro Root Certificate (keep updated from AWS documentation)
+TRUSTED_ROOT_PEM = """-----BEGIN CERTIFICATE-----
+MIICETCCAZagAwIBAgIRAPkxdWgbkK/hHUbMtOTn+FYwCgYIKoZIzj0EAwMwSTEL
+MAkGA1UEBhMCVVMxDzANBgNVBAoMBkFtYXpvbjEMMAoGA1UECwwDQVdTMRswGQYD
+VQQDDBJhd3Mubml0cm8tZW5jbGF2ZXMwHhcNMTkxMDI4MTMyODU1WhcNNDkxMDI4
+MTQyODU1WjBJMQswCQYDVQQGEwJVUzEPMA0GA1UECgwGQW1hem9uMQwwCgYDVQQL
+DAZBV1MxGzAZBgNVBAMMEmF3cy5uaXRyby1lbmNsYXZlczB2MBAGByqGSM49AgEG
+BSuBBAAiA2IABPwCVOumCMHzaHDimtqQvkY4MpJzbolL//Zy2YlES1BR5TSksfbb
+48C8WBoyt7F2Bw7eEtaaP+ohG+ykBHFPkjAFA+aaIssEgbzM6MbV9hFz6KJ0s8TH
+JsTGM7KXEZ2AdDOWO6XdXN1tM6+a3Q5mh1CdQA1Dh9v4PF4RMaHKRJTwUlQ3YmVv
+Vmu+EBr0SH82Y6t1CxGx0BnYe2bhZLMgHIy7FAg==
+-----END CERTIFICATE-----"""
+
+
+class AttestationError(Exception):
+    """Exception raised for attestation verification errors."""
+    pass
+
+
+def load_certificates(leaf_der: bytes, bundle_ders: List[bytes]) -> Tuple[Certificate, List[Certificate], Certificate]:
+    """Load and parse certificates from DER format."""
+    try:
+        leaf = x509.load_der_x509_certificate(leaf_der)
+        bundle = [x509.load_der_x509_certificate(der) for der in bundle_ders]
+        root = x509.load_pem_x509_certificate(TRUSTED_ROOT_PEM.encode())
+        return leaf, bundle, root
+    except Exception as e:
+        raise AttestationError(f"Failed to load certificates: {e}")
+
+
+def verify_certificate_chain(leaf: Certificate, bundle: List[Certificate], root: Certificate):
+    """Verify the certificate chain from leaf to root."""
+    try:
+        # Basic time validity check for leaf
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if not (leaf.not_valid_before_utc <= now <= leaf.not_valid_after_utc):
+            raise AttestationError(f"Leaf certificate not currently valid. Valid from {leaf.not_valid_before_utc} to {leaf.not_valid_after_utc}, current time: {now}")
+        
+        # Verify leaf is signed by first intermediate or root
+        issuer = bundle[0] if bundle else root
+        issuer_public_key = issuer.public_key()
+        
+        try:
+            issuer_public_key.verify(
+                leaf.signature,
+                leaf.tbs_certificate_bytes,
+                leaf.signature_hash_algorithm
+            )
+        except Exception as e:
+            raise AttestationError(f"Leaf certificate signature verification failed: {e}")
+        
+        # Verify intermediate chain to root
+        for i in range(len(bundle)):
+            current = bundle[i]
+            next_issuer = bundle[i + 1] if i + 1 < len(bundle) else root
+            
+            # Check validity
+            if not (current.not_valid_before_utc <= now <= current.not_valid_after_utc):
+                raise AttestationError(f"Intermediate certificate {i} not currently valid")
+            
+            try:
+                next_issuer_public_key = next_issuer.public_key()
+                next_issuer_public_key.verify(
+                    current.signature,
+                    current.tbs_certificate_bytes,
+                    current.signature_hash_algorithm
+                )
+            except Exception as e:
+                raise AttestationError(f"Intermediate certificate {i} signature verification failed: {e}")
+                
+    except AttestationError:
+        raise
+    except Exception as e:
+        raise AttestationError(f"Certificate chain verification failed: {e}")
+
+
+def verify_cose_signature(cose_bytes: bytes, leaf_cert: Certificate) -> bytes:
+    """Verify COSE signature using leaf certificate public key."""
+    try:
+        msg = Sign1Message.decode(cose_bytes)
+        
+        # Check algorithm is ES384
+        alg = msg.phdr.get(1)  # Algorithm parameter
+        if alg != Es384.identifier:
+            raise AttestationError(f"Unexpected COSE algorithm: {alg}, expected ES384 ({Es384.identifier})")
+        
+        # Get public key from leaf certificate
+        pub_key = leaf_cert.public_key()
+        if not isinstance(pub_key, ec.EllipticCurvePublicKey):
+            raise AttestationError("Leaf certificate does not contain an EC public key")
+        
+        if pub_key.curve.name != "secp384r1":
+            raise AttestationError(f"Unexpected curve: {pub_key.curve.name}, expected secp384r1")
+        
+        # Convert to COSE key and verify
+        cose_key = CoseKey.from_cryptography_key(pub_key)
+        msg.key = cose_key
+        
+        if not msg.verify_signature():
+            raise AttestationError("COSE signature verification failed")
+            
+        return msg.payload
+        
+    except AttestationError:
+        raise
+    except Exception as e:
+        raise AttestationError(f"COSE signature verification error: {e}")
+
+
+def parse_payload(payload_bytes: bytes) -> Dict[str, Any]:
+    """Parse and validate the CBOR payload."""
+    try:
+        payload = cbor2.loads(payload_bytes)
+        
+        # Convert bytes keys to strings for easier handling
+        result = {}
+        for key, value in payload.items():
+            if isinstance(key, bytes):
+                str_key = key.decode('utf-8')
+            else:
+                str_key = str(key)
+            result[str_key] = value
+            
+        return result
+        
+    except Exception as e:
+        raise AttestationError(f"Failed to parse CBOR payload: {e}")
+
+
+def verify_attestation_document(
+    b64_doc: str,
+    expected_user_data: Optional[bytes] = None,
+    expected_nonce: Optional[bytes] = None,
+    max_age_seconds: int = 300
+) -> Dict[str, Any]:
+    """
+    Verify an attestation document and return the parsed payload.
+    
+    Args:
+        b64_doc: Base64-encoded attestation document
+        expected_user_data: Expected user data (optional)
+        expected_nonce: Expected nonce (optional)  
+        max_age_seconds: Maximum age of the attestation in seconds
+        
+    Returns:
+        Parsed and verified attestation payload
+    """
+    try:
+        # Decode from base64
+        cose_bytes = base64.b64decode(b64_doc.strip())
+        
+        # Parse COSE message to extract certificates
+        msg = Sign1Message.decode(cose_bytes)
+        payload = cbor2.loads(msg.payload)
+        
+        # Extract certificates
+        leaf_der = payload.get(b"certificate")
+        bundle_ders = payload.get(b"cabundle", [])
+        
+        if not leaf_der:
+            raise AttestationError("Missing leaf certificate in attestation payload")
+        
+        # Load and verify certificate chain
+        leaf, bundle, root = load_certificates(leaf_der, bundle_ders)
+        verify_certificate_chain(leaf, bundle, root)
+        
+        # Verify COSE signature
+        verified_payload_bytes = verify_cose_signature(cose_bytes, leaf)
+        verified_payload = parse_payload(verified_payload_bytes)
+        
+        # Verify timestamp freshness
+        timestamp = verified_payload.get("timestamp")
+        if timestamp:
+            # Convert milliseconds to seconds
+            doc_time = datetime.datetime.fromtimestamp(timestamp / 1000, tz=datetime.timezone.utc)
+            now = datetime.datetime.now(datetime.timezone.utc)
+            age = (now - doc_time).total_seconds()
+            
+            if age > max_age_seconds:
+                raise AttestationError(f"Attestation document too old: {age:.1f} seconds (max {max_age_seconds})")
+        
+        # Verify expected values
+        if expected_user_data is not None:
+            actual_user_data = verified_payload.get("user_data")
+            if actual_user_data != expected_user_data:
+                raise AttestationError(f"User data mismatch: expected {expected_user_data}, got {actual_user_data}")
+        
+        if expected_nonce is not None:
+            actual_nonce = verified_payload.get("nonce")
+            if actual_nonce != expected_nonce:
+                raise AttestationError(f"Nonce mismatch: expected {expected_nonce}, got {actual_nonce}")
+        
+        # Add verification status
+        verified_payload["verification_status"] = "SUCCESS"
+        verified_payload["verified_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        
+        return verified_payload
+        
+    except AttestationError:
+        raise
+    except Exception as e:
+        raise AttestationError(f"Attestation verification failed: {e}")
+
+
+def main():
+    """Main entry point for the verifier."""
+    if len(sys.argv) < 2:
+        # Read from stdin
+        b64_doc = sys.stdin.read().strip()
+    else:
+        # Read from file
+        with open(sys.argv[1], 'r') as f:
+            b64_doc = f.read().strip()
+    
+    if not b64_doc:
+        print("Error: No attestation document provided", file=sys.stderr)
+        sys.exit(1)
+    
+    try:
+        result = verify_attestation_document(b64_doc)
+        
+        # Print key information
+        print("✅ Attestation document verified successfully!")
+        print(f"Module ID: {result.get('module_id')}")
+        print(f"Timestamp: {result.get('timestamp')}")
+        print(f"User data: {result.get('user_data')}")
+        print(f"Nonce: {result.get('nonce')}")
+        print(f"Public key: {'Present' if result.get('public_key') else 'None'}")
+        print(f"PCRs: {len(result.get('pcrs', {}))} measurements")
+        print(f"Verified at: {result.get('verified_at')}")
+        
+        # Optionally print full result as JSON
+        if "--json" in sys.argv:
+            import json
+            # Convert bytes to base64 for JSON serialization
+            json_result = {}
+            for k, v in result.items():
+                if isinstance(v, bytes):
+                    json_result[k] = base64.b64encode(v).decode('ascii')
+                elif isinstance(v, dict):
+                    # Handle PCRs dict with bytes values
+                    if k == 'pcrs':
+                        json_result[k] = {str(pcr_k): base64.b64encode(pcr_v).decode('ascii') if isinstance(pcr_v, bytes) else pcr_v for pcr_k, pcr_v in v.items()}
+                    else:
+                        json_result[k] = v
+                else:
+                    json_result[k] = v
+            print("\nFull verification result:")
+            print(json.dumps(json_result, indent=2))
+        
+    except AttestationError as e:
+        print(f"❌ Attestation verification failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Unexpected error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

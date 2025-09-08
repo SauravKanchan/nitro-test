@@ -1,0 +1,29 @@
+# AWS Nitro Enclaves Attestation Dependencies
+
+# Enclave-side dependencies (for enclave_app.py)
+aws-nsm-interface>=0.1.0
+cryptography>=41.0.0
+cbor2>=5.4.0
+
+# Parent-side dependencies (for verifier.py)
+python-cose>=1.2.0
+cryptography>=41.0.0
+cbor2>=5.4.0
+
+# Testing dependencies
+pytest>=7.0.0
+pytest-cov>=4.0.0
+
+# Optional: for JSON output formatting
+# (included in Python standard library, no need to install)
+
+# Note: Install subsets based on your environment:
+# 
+# For enclave image:
+#   pip install aws-nsm-interface cryptography cbor2
+#
+# For parent instance:
+#   pip install python-cose cryptography cbor2 pytest pytest-cov
+#
+# For development (both):
+#   pip install -r requirements.txt

@@ -35,11 +35,8 @@ RUN chmod +x /app/enclave_app.py
 # RUN useradd -r -s /bin/false enclaveuser
 # USER enclaveuser
 
-# Set the entrypoint
-ENTRYPOINT ["python3", "/app/enclave_app.py"]
-
-# Default command arguments (can be overridden)
-CMD []
+# Keep container running - allows manual execution via nitro-cli console
+CMD ["sh", "-c", "echo 'Enclave ready. Use: python3 /app/enclave_app.py [options]' && while true; do sleep 3600; done"]
 
 # Health check (optional - verify Python and dependencies work)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

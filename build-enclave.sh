@@ -8,6 +8,14 @@ IMAGE_NAME="nitro-attestation"
 EIF_NAME="app.eif"
 DOCKER_TAG="latest"
 
+# Pull latest changes from git repository
+echo "📥 Pulling latest changes from git repository..."
+if git pull; then
+    echo "✅ Git pull completed successfully"
+else
+    echo "⚠️  Git pull failed or no changes - continuing with build..."
+fi
+
 # Check for running enclaves and terminate them
 echo "🔍 Checking for running enclaves..."
 RUNNING_ENCLAVES=$(sudo nitro-cli describe-enclaves 2>/dev/null || echo "[]")
@@ -51,5 +59,19 @@ echo "📋 Enclave image information:"
 nitro-cli describe-eif --eif-path "${EIF_NAME}"
 
 echo ""
-echo "🚀 Ready to run enclave with:"
-echo "nitro-cli run-enclave --cpu-count 2 --memory 1920 --eif-path ${EIF_NAME} --debug-mode"
+echo "🚀 Starting enclave automatically..."
+nitro-cli run-enclave --cpu-count 2 --memory 1920 --eif-path ${EIF_NAME} --debug-mode
+
+echo ""
+echo "✅ Enclave started successfully!"
+echo "📊 Enclave status:"
+sudo nitro-cli describe-enclaves
+
+echo ""
+echo "🔗 To test vsock connection:"
+echo "   python3 vsock_client.py --ping"
+echo "   python3 vsock_client.py --verify --generate-key"
+
+echo ""
+echo "📝 To connect to enclave console:"
+echo "   nitro-cli console --enclave-name \$(sudo nitro-cli describe-enclaves | jq -r '.[0].EnclaveID')"

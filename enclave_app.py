@@ -6,13 +6,13 @@ This runs inside the enclave and uses the NSM (Nitro Secure Module) API.
 
 import base64
 import sys
-from typing import Optional
+from typing import Optional, Tuple
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 import aws_nsm_interface
 
 
-def generate_ephemeral_keypair() -> tuple[ec.EllipticCurvePrivateKey, bytes]:
+def generate_ephemeral_keypair() -> Tuple[ec.EllipticCurvePrivateKey, bytes]:
     """Generate an ephemeral ECDSA P-384 keypair inside the enclave."""
     private_key = ec.generate_private_key(ec.SECP384R1())
     public_key_der = private_key.public_key().public_bytes(

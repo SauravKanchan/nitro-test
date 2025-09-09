@@ -6,7 +6,7 @@ cryptography>=41.0.0
 cbor2>=5.4.0
 
 # Parent-side dependencies (for verifier.py)
-cose>=1.2.0
+cose>=0.9.dev8
 cryptography>=41.0.0
 cbor2>=5.4.0
 

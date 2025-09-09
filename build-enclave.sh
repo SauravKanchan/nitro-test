@@ -8,6 +8,21 @@ IMAGE_NAME="nitro-attestation"
 EIF_NAME="app.eif"
 DOCKER_TAG="latest"
 
+# Check for running enclaves and terminate them
+echo "🔍 Checking for running enclaves..."
+RUNNING_ENCLAVES=$(sudo nitro-cli describe-enclaves 2>/dev/null || echo "[]")
+
+if [ "$RUNNING_ENCLAVES" != "[]" ] && [ "$(echo "$RUNNING_ENCLAVES" | jq '. | length')" -gt 0 ]; then
+    echo "🛑 Found running enclaves, terminating them..."
+    sudo nitro-cli terminate-enclave --all
+    echo "✅ All enclaves terminated"
+    
+    # Wait a moment for cleanup
+    sleep 2
+else
+    echo "✅ No running enclaves found"
+fi
+
 echo "🔨 Building Docker image for Nitro Enclave..."
 
 # Build the Docker image

@@ -28,17 +28,17 @@ WORKDIR /app
 # Copy the enclave applications
 COPY enclave_app.py /app/
 COPY vsock_server.py /app/
+COPY startup.sh /app/
 
-# Make the script executable
-RUN chmod +x /app/enclave_app.py
+# Make scripts executable
+RUN chmod +x /app/enclave_app.py /app/startup.sh
 
 # Create a non-root user for security (optional, enclave may need root for /dev/nsm)
 # RUN useradd -r -s /bin/false enclaveuser
 # USER enclaveuser
 
-# Keep container running - start vsock server manually via console
-# Use: python3 /app/enclave_app.py --vsock (inside console)
-CMD ["sh", "-c", "while true; do sleep 3600; done"]
+# Automatically start vsock server via startup script
+CMD ["/app/startup.sh"]
 
 # Labels for documentation
 LABEL maintainer="AWS Nitro Enclaves Attestation"

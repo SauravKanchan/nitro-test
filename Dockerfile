@@ -36,11 +36,7 @@ RUN chmod +x /app/enclave_app.py
 # USER enclaveuser
 
 # Keep container running - allows manual execution via nitro-cli console
-CMD ["sh", "-c", "echo 'Enclave ready. Use: python3 /app/enclave_app.py [options]' && while true; do sleep 3600; done"]
-
-# Health check (optional - verify Python and dependencies work)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python3 -c "import aws_nsm_interface, cryptography, cbor2; print('Dependencies OK')" || exit 1
+CMD ["sh", "-c", "while true; do sleep 3600; done"]
 
 # Labels for documentation
 LABEL maintainer="AWS Nitro Enclaves Attestation"

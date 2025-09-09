@@ -9,7 +9,7 @@ import sys
 from typing import Optional
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-from aws_nsm_interface import Nsm
+import aws_nsm_interface
 
 
 def generate_ephemeral_keypair() -> tuple[ec.EllipticCurvePrivateKey, bytes]:
@@ -28,15 +28,34 @@ def get_attestation_document(
     public_key: Optional[bytes] = None
 ) -> bytes:
     """Request an attestation document from the Nitro Secure Module."""
+    file_desc = None
     try:
-        nsm = Nsm()
-        doc = nsm.get_attestation_doc(
+        # Open NSM device
+        file_desc = aws_nsm_interface.open_nsm_device()
+        
+        # Get attestation document
+        result = aws_nsm_interface.get_attestation_doc(
+            file_desc,
             user_data=user_data,
             nonce=nonce,
-            public_key=public_key,
+            public_key=public_key
         )
+        
+        # Extract document from result dict
+        doc = result['document']
+        
+        # Close NSM device
+        aws_nsm_interface.close_nsm_device(file_desc)
+        
         return doc
+        
     except Exception as e:
+        # Ensure we close file descriptor on error
+        if file_desc is not None:
+            try:
+                aws_nsm_interface.close_nsm_device(file_desc)
+            except:
+                pass
         print(f"Error getting attestation document: {e}", file=sys.stderr)
         raise
 

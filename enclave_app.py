@@ -30,32 +30,70 @@ def get_attestation_document(
     """Request an attestation document from the Nitro Secure Module."""
     file_desc = None
     try:
+        print(f"🔍 Opening NSM device...", file=sys.stderr)
         # Open NSM device
         file_desc = aws_nsm_interface.open_nsm_device()
+        print(f"✅ NSM device opened, file_desc: {file_desc}", file=sys.stderr)
+        
+        # Debug parameter info
+        print(f"🔍 Requesting attestation with parameters:", file=sys.stderr)
+        print(f"  user_data: {user_data} (type: {type(user_data)})", file=sys.stderr)
+        print(f"  nonce: {nonce} (type: {type(nonce)})", file=sys.stderr)
+        print(f"  public_key: {public_key is not None} (type: {type(public_key)})", file=sys.stderr)
+        
+        # Try with minimal parameters first to isolate the issue
+        print(f"🔍 Calling aws_nsm_interface.get_attestation_doc...", file=sys.stderr)
+        
+        # Build parameter dict, excluding None values
+        params = {}
+        if user_data is not None:
+            params['user_data'] = user_data
+        if nonce is not None:
+            params['nonce'] = nonce
+        if public_key is not None:
+            params['public_key'] = public_key
+            
+        print(f"🔍 Final parameters: {params}", file=sys.stderr)
         
         # Get attestation document
-        result = aws_nsm_interface.get_attestation_doc(
-            file_desc,
-            user_data=user_data,
-            nonce=nonce,
-            public_key=public_key
-        )
+        result = aws_nsm_interface.get_attestation_doc(file_desc, **params)
+        print(f"✅ get_attestation_doc returned: {type(result)}", file=sys.stderr)
         
-        # Extract document from result dict
-        doc = result['document']
+        # Check result structure
+        if isinstance(result, dict):
+            print(f"🔍 Result keys: {list(result.keys())}", file=sys.stderr)
+            if 'document' in result:
+                doc = result['document']
+                print(f"✅ Document extracted, size: {len(doc)} bytes", file=sys.stderr)
+            else:
+                print(f"❌ No 'document' key in result", file=sys.stderr)
+                raise ValueError("No 'document' key in attestation result")
+        else:
+            print(f"❌ Result is not a dict: {type(result)}", file=sys.stderr)
+            doc = result  # Maybe it returns the document directly
         
         # Close NSM device
+        print(f"🔍 Closing NSM device...", file=sys.stderr)
         aws_nsm_interface.close_nsm_device(file_desc)
+        print(f"✅ NSM device closed", file=sys.stderr)
         
         return doc
         
     except Exception as e:
+        print(f"❌ Exception occurred: {e}", file=sys.stderr)
+        print(f"❌ Exception type: {type(e)}", file=sys.stderr)
+        import traceback
+        print(f"❌ Traceback: {traceback.format_exc()}", file=sys.stderr)
+        
         # Ensure we close file descriptor on error
         if file_desc is not None:
             try:
+                print(f"🔍 Attempting to close NSM device on error...", file=sys.stderr)
                 aws_nsm_interface.close_nsm_device(file_desc)
-            except:
-                pass
+                print(f"✅ NSM device closed on error", file=sys.stderr)
+            except Exception as close_error:
+                print(f"❌ Error closing NSM device: {close_error}", file=sys.stderr)
+        
         print(f"Error getting attestation document: {e}", file=sys.stderr)
         raise
 

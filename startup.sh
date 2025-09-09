@@ -92,6 +92,17 @@ fi
 
 log "✅ Changed to /app directory"
 
+# Test NSM functionality first
+log "🧪 Testing NSM functionality before starting server..."
+if python3 enclave_app.py --test-nsm 2>&1 | while IFS= read -r line; do
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [NSM-TEST] $line" >&2
+done; then
+    log "✅ NSM test passed, proceeding with vsock server..."
+else
+    log "❌ NSM test failed, starting fallback mode..."
+    start_fallback
+fi
+
 # Start vsock server with robust error handling
 log "🔥 Attempting to start vsock server on port 9000..."
 log "📝 Command: python3 enclave_app.py --vsock"

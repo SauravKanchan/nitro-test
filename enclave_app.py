@@ -22,6 +22,36 @@ def generate_ephemeral_keypair() -> Tuple[ec.EllipticCurvePrivateKey, bytes]:
     return private_key, public_key_der
 
 
+def test_nsm_basic() -> bool:
+    """Test basic NSM functionality without parameters."""
+    try:
+        print(f"🧪 Testing basic NSM functionality...", file=sys.stderr)
+        sys.stderr.flush()
+        
+        file_desc = aws_nsm_interface.open_nsm_device()
+        print(f"✅ NSM device opened: {file_desc}", file=sys.stderr)
+        sys.stderr.flush()
+        
+        # Try with absolutely minimal parameters
+        result = aws_nsm_interface.get_attestation_doc(file_desc)
+        print(f"✅ Basic attestation successful: {type(result)}", file=sys.stderr)
+        sys.stderr.flush()
+        
+        aws_nsm_interface.close_nsm_device(file_desc)
+        print(f"✅ NSM device closed", file=sys.stderr)
+        sys.stderr.flush()
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Basic NSM test failed: {e}", file=sys.stderr)
+        sys.stderr.flush()
+        import traceback
+        print(f"❌ Traceback: {traceback.format_exc()}", file=sys.stderr)
+        sys.stderr.flush()
+        return False
+
+
 def get_attestation_document(
     user_data: Optional[bytes] = None,
     nonce: Optional[bytes] = None,
@@ -31,9 +61,11 @@ def get_attestation_document(
     file_desc = None
     try:
         print(f"🔍 Opening NSM device...", file=sys.stderr)
+        sys.stderr.flush()
         # Open NSM device
         file_desc = aws_nsm_interface.open_nsm_device()
         print(f"✅ NSM device opened, file_desc: {file_desc}", file=sys.stderr)
+        sys.stderr.flush()
         
         # Debug parameter info
         print(f"🔍 Requesting attestation with parameters:", file=sys.stderr)
@@ -213,6 +245,16 @@ def main():
             run_vsock_server(port)
             return
             
+        # Check for NSM test
+        elif command == "--test-nsm":
+            print("🧪 Running NSM basic test...", file=sys.stderr)
+            if test_nsm_basic():
+                print("✅ NSM test passed!", file=sys.stderr)
+            else:
+                print("❌ NSM test failed!", file=sys.stderr)
+                sys.exit(1)
+            return
+            
         # Check for help
         elif command in ["-h", "--help"]:
             print("AWS Nitro Enclave Attestation App", file=sys.stderr)
@@ -225,12 +267,14 @@ def main():
             print("  --daemon                    Run in interactive daemon mode", file=sys.stderr)
             print("  --vsock [port]             Run vsock server (default port: 9000)", file=sys.stderr)
             print("  --vsock-server [port]      Same as --vsock", file=sys.stderr)
+            print("  --test-nsm                 Test basic NSM functionality", file=sys.stderr)
             print("  -h, --help                 Show this help message", file=sys.stderr)
             print("", file=sys.stderr)
             print("Examples:", file=sys.stderr)
             print("  python3 enclave_app.py --generate-key", file=sys.stderr)
             print("  python3 enclave_app.py --daemon", file=sys.stderr)
             print("  python3 enclave_app.py --vsock 9000", file=sys.stderr)
+            print("  python3 enclave_app.py --test-nsm", file=sys.stderr)
             print("  python3 enclave_app.py --generate-key \"my-data\" \"my-nonce\"", file=sys.stderr)
             return
     

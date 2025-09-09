@@ -118,12 +118,64 @@ def generate_attestation(user_data=b"hello-from-enclave", nonce=None, generate_k
         print(f"Failed to generate attestation document: {e}", file=sys.stderr)
 
 
+def run_vsock_server(port=9000):
+    """Run the vsock server mode."""
+    print(f"🔥 Starting vsock server on port {port}...", file=sys.stderr)
+    try:
+        from vsock_server import VsockAttestationServer
+        server = VsockAttestationServer(port)
+        server.start()
+    except ImportError:
+        print("❌ vsock_server.py not found. Make sure it's in the same directory.", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Failed to start vsock server: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     """Main entry point for the enclave application."""
-    # Check for daemon mode
-    if len(sys.argv) > 1 and sys.argv[1] == "--daemon":
-        run_daemon_mode()
-        return
+    # Parse command line arguments
+    if len(sys.argv) > 1:
+        command = sys.argv[1]
+        
+        # Check for daemon mode
+        if command == "--daemon":
+            run_daemon_mode()
+            return
+            
+        # Check for vsock server mode
+        elif command == "--vsock" or command == "--vsock-server":
+            port = 9000
+            if len(sys.argv) > 2:
+                try:
+                    port = int(sys.argv[2])
+                except ValueError:
+                    print(f"Invalid port: {sys.argv[2]}", file=sys.stderr)
+                    sys.exit(1)
+            run_vsock_server(port)
+            return
+            
+        # Check for help
+        elif command in ["-h", "--help"]:
+            print("AWS Nitro Enclave Attestation App", file=sys.stderr)
+            print("", file=sys.stderr)
+            print("Usage:", file=sys.stderr)
+            print("  python3 enclave_app.py [options]", file=sys.stderr)
+            print("", file=sys.stderr)
+            print("Options:", file=sys.stderr)
+            print("  --generate-key              Generate attestation with ephemeral key", file=sys.stderr)
+            print("  --daemon                    Run in interactive daemon mode", file=sys.stderr)
+            print("  --vsock [port]             Run vsock server (default port: 9000)", file=sys.stderr)
+            print("  --vsock-server [port]      Same as --vsock", file=sys.stderr)
+            print("  -h, --help                 Show this help message", file=sys.stderr)
+            print("", file=sys.stderr)
+            print("Examples:", file=sys.stderr)
+            print("  python3 enclave_app.py --generate-key", file=sys.stderr)
+            print("  python3 enclave_app.py --daemon", file=sys.stderr)
+            print("  python3 enclave_app.py --vsock 9000", file=sys.stderr)
+            print("  python3 enclave_app.py --generate-key \"my-data\" \"my-nonce\"", file=sys.stderr)
+            return
     
     # Default values
     USER_DATA = b"hello-from-enclave"

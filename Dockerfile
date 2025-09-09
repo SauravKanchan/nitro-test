@@ -25,8 +25,9 @@ RUN pip3 install --no-cache-dir \
 # Create application directory
 WORKDIR /app
 
-# Copy the enclave application
+# Copy the enclave applications
 COPY enclave_app.py /app/
+COPY vsock_server.py /app/
 
 # Make the script executable
 RUN chmod +x /app/enclave_app.py
@@ -35,8 +36,9 @@ RUN chmod +x /app/enclave_app.py
 # RUN useradd -r -s /bin/false enclaveuser
 # USER enclaveuser
 
-# Keep container running - allows manual execution via nitro-cli console
-CMD ["sh", "-c", "while true; do sleep 3600; done"]
+# Default: Start vsock server automatically 
+# Can be overridden with: nitro-cli run-enclave --debug-mode --enclave-cid X
+CMD ["python3", "/app/enclave_app.py", "--vsock"]
 
 # Labels for documentation
 LABEL maintainer="AWS Nitro Enclaves Attestation"

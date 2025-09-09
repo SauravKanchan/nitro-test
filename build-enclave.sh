@@ -37,4 +37,4 @@ nitro-cli describe-eif --eif-path "${EIF_NAME}"
 
 echo ""
 echo "🚀 Ready to run enclave with:"
-echo "   nitro-cli run-enclave --cpu-count 2 --memory 512 --eif-path ${EIF_NAME}"
+echo "nitro-cli run-enclave --cpu-count 1 --memory 1920 --eif-path ${EIF_NAME} --debug-mode"

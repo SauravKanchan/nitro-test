@@ -179,14 +179,19 @@ def verify_cose_signature(cose_bytes: bytes, leaf_cert: Certificate) -> bytes:
         payload = cbor_data[2]          # Payload (attestation data)
         signature_bytes = cbor_data[3]  # Signature
         
+        print(f"Debug: COSE components - protected: {len(protected_bytes) if protected_bytes else 0} bytes, payload: {len(payload)} bytes, signature: {len(signature_bytes)} bytes", file=sys.stderr)
+        
         # Parse protected headers
         if protected_bytes:
             protected = cbor2.loads(protected_bytes)
+            print(f"Debug: Protected headers: {protected}", file=sys.stderr)
         else:
             protected = {}
+            print("Debug: No protected headers", file=sys.stderr)
         
         # Verify algorithm is ES384 (ECDSA P-384 with SHA-384)
         alg = protected.get(1)  # Algorithm parameter (key 1 in COSE)
+        print(f"Debug: COSE algorithm: {alg}", file=sys.stderr)
         if alg != -35:  # ES384 algorithm identifier
             raise AttestationError(f"Unexpected COSE algorithm: {alg}, expected ES384 (-35)")
         
@@ -197,6 +202,8 @@ def verify_cose_signature(cose_bytes: bytes, leaf_cert: Certificate) -> bytes:
         
         if pub_key.curve.name != "secp384r1":
             raise AttestationError(f"Unexpected curve: {pub_key.curve.name}, expected secp384r1")
+        
+        print(f"Debug: Using public key from leaf cert: {pub_key.curve.name}", file=sys.stderr)
         
         # Build Sig_structure as per COSE RFC 8152 Section 4.4
         # Sig_structure = [
@@ -217,15 +224,23 @@ def verify_cose_signature(cose_bytes: bytes, leaf_cert: Certificate) -> bytes:
         
         # Encode Sig_structure as CBOR
         sig_structure_bytes = cbor2.dumps(sig_structure)
+        print(f"Debug: Sig_structure length: {len(sig_structure_bytes)} bytes", file=sys.stderr)
+        print(f"Debug: Sig_structure hex (first 64 bytes): {sig_structure_bytes[:64].hex()}", file=sys.stderr)
+        print(f"Debug: Signature bytes hex (first 32 bytes): {signature_bytes[:32].hex()}", file=sys.stderr)
+        print(f"Debug: Signature bytes hex (last 32 bytes): {signature_bytes[-32:].hex()}", file=sys.stderr)
         
         # Verify signature using ECDSA P-384 with SHA-384
         try:
+            print("Debug: Attempting ECDSA signature verification...", file=sys.stderr)
             pub_key.verify(
                 signature_bytes,
                 sig_structure_bytes,
                 ec.ECDSA(hashes.SHA384())
             )
+            print("Debug: ECDSA signature verification successful!", file=sys.stderr)
         except Exception as e:
+            print(f"Debug: ECDSA signature verification failed: {e}", file=sys.stderr)
+            print(f"Debug: Exception type: {type(e)}", file=sys.stderr)
             raise AttestationError(f"ECDSA signature verification failed: {e}")
             
         return payload

@@ -62,11 +62,21 @@ def verify_certificate_chain(leaf: Certificate, bundle: List[Certificate], root:
         issuer_public_key = issuer.public_key()
         
         try:
-            issuer_public_key.verify(
-                leaf.signature,
-                leaf.tbs_certificate_bytes,
-                leaf.signature_hash_algorithm
-            )
+            # For AWS Nitro certificates, use ECDSA with SHA384 explicitly
+            # The signature_hash_algorithm might not be properly detected
+            if isinstance(issuer_public_key, ec.EllipticCurvePublicKey):
+                issuer_public_key.verify(
+                    leaf.signature,
+                    leaf.tbs_certificate_bytes,
+                    ec.ECDSA(hashes.SHA384())
+                )
+            else:
+                # Fallback to the certificate's declared algorithm
+                issuer_public_key.verify(
+                    leaf.signature,
+                    leaf.tbs_certificate_bytes,
+                    leaf.signature_hash_algorithm
+                )
         except Exception as e:
             raise AttestationError(f"Leaf certificate signature verification failed: {e}")
         
@@ -81,11 +91,20 @@ def verify_certificate_chain(leaf: Certificate, bundle: List[Certificate], root:
             
             try:
                 next_issuer_public_key = next_issuer.public_key()
-                next_issuer_public_key.verify(
-                    current.signature,
-                    current.tbs_certificate_bytes,
-                    current.signature_hash_algorithm
-                )
+                # For AWS Nitro certificates, use ECDSA with SHA384 explicitly
+                if isinstance(next_issuer_public_key, ec.EllipticCurvePublicKey):
+                    next_issuer_public_key.verify(
+                        current.signature,
+                        current.tbs_certificate_bytes,
+                        ec.ECDSA(hashes.SHA384())
+                    )
+                else:
+                    # Fallback to the certificate's declared algorithm
+                    next_issuer_public_key.verify(
+                        current.signature,
+                        current.tbs_certificate_bytes,
+                        current.signature_hash_algorithm
+                    )
             except Exception as e:
                 raise AttestationError(f"Intermediate certificate {i} signature verification failed: {e}")
                 
@@ -214,31 +233,26 @@ def verify_attestation_document(
         if not isinstance(cbor_data, list) or len(cbor_data) != 4:
             raise AttestationError("Invalid attestation document structure")
         
-        # Debug: examine the payload structure
-        print(f"Debug: CBOR array types: {[type(item) for item in cbor_data]}", file=sys.stderr)
-        print(f"Debug: Payload (index 2) type: {type(cbor_data[2])}", file=sys.stderr)
-        
-        # The payload should be CBOR-encoded bytes, let's decode it
+        # The payload should be CBOR-encoded bytes, decode it
         payload_bytes = cbor_data[2]
         if isinstance(payload_bytes, bytes):
             payload = cbor2.loads(payload_bytes)
         else:
             payload = payload_bytes  # Maybe it's already decoded
         
-        print(f"Debug: Decoded payload type: {type(payload)}", file=sys.stderr)
-        if isinstance(payload, dict):
-            keys = list(payload.keys())[:10]  # Show first 10 keys
-            print(f"Debug: Payload keys (first 10): {keys}", file=sys.stderr)
-            # Show key types
-            key_types = {k: type(k) for k in keys}
-            print(f"Debug: Key types: {key_types}", file=sys.stderr)
+        # Extract certificates (they are base64-encoded strings in the payload)
+        leaf_b64 = payload.get("certificate")
+        bundle_b64_list = payload.get("cabundle", [])
         
-        # Extract certificates - try both bytes and string keys
-        leaf_der = payload.get(b"certificate") or payload.get("certificate")
-        bundle_ders = payload.get(b"cabundle", []) or payload.get("cabundle", [])
-        
-        if not leaf_der:
+        if not leaf_b64:
             raise AttestationError("Missing leaf certificate in attestation payload")
+        
+        # Decode certificates from base64 to DER bytes
+        try:
+            leaf_der = base64.b64decode(leaf_b64)
+            bundle_ders = [base64.b64decode(cert_b64) for cert_b64 in bundle_b64_list]
+        except Exception as e:
+            raise AttestationError(f"Failed to decode certificates from base64: {e}")
         
         # Load and verify certificate chain
         leaf, bundle, root = load_certificates(leaf_der, bundle_ders)

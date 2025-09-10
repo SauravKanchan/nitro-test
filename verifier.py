@@ -240,19 +240,36 @@ def verify_attestation_document(
         else:
             payload = payload_bytes  # Maybe it's already decoded
         
-        # Extract certificates (they are base64-encoded strings in the payload)
-        leaf_b64 = payload.get("certificate")
-        bundle_b64_list = payload.get("cabundle", [])
+        # Extract certificates from payload
+        leaf_cert_data = payload.get("certificate")
+        bundle_cert_data = payload.get("cabundle", [])
         
-        if not leaf_b64:
+        if not leaf_cert_data:
             raise AttestationError("Missing leaf certificate in attestation payload")
         
-        # Decode certificates from base64 to DER bytes
+        # Handle certificate data - it might be raw DER bytes or base64 strings
         try:
-            leaf_der = base64.b64decode(leaf_b64)
-            bundle_ders = [base64.b64decode(cert_b64) for cert_b64 in bundle_b64_list]
+            if isinstance(leaf_cert_data, bytes):
+                # Already raw DER bytes
+                leaf_der = leaf_cert_data
+            elif isinstance(leaf_cert_data, str):
+                # Base64-encoded string, need to decode
+                leaf_der = base64.b64decode(leaf_cert_data)
+            else:
+                raise AttestationError(f"Unexpected certificate data type: {type(leaf_cert_data)}")
+            
+            # Handle bundle certificates
+            bundle_ders = []
+            for cert_data in bundle_cert_data:
+                if isinstance(cert_data, bytes):
+                    bundle_ders.append(cert_data)
+                elif isinstance(cert_data, str):
+                    bundle_ders.append(base64.b64decode(cert_data))
+                else:
+                    raise AttestationError(f"Unexpected bundle certificate data type: {type(cert_data)}")
+                    
         except Exception as e:
-            raise AttestationError(f"Failed to decode certificates from base64: {e}")
+            raise AttestationError(f"Failed to process certificate data: {e}")
         
         # Load and verify certificate chain
         leaf, bundle, root = load_certificates(leaf_der, bundle_ders)

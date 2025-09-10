@@ -213,11 +213,29 @@ def verify_attestation_document(
         cbor_data = cbor2.loads(cose_bytes)
         if not isinstance(cbor_data, list) or len(cbor_data) != 4:
             raise AttestationError("Invalid attestation document structure")
-        payload = cbor2.loads(cbor_data[2])  # Payload is at index 2
         
-        # Extract certificates
-        leaf_der = payload.get(b"certificate")
-        bundle_ders = payload.get(b"cabundle", [])
+        # Debug: examine the payload structure
+        print(f"Debug: CBOR array types: {[type(item) for item in cbor_data]}", file=sys.stderr)
+        print(f"Debug: Payload (index 2) type: {type(cbor_data[2])}", file=sys.stderr)
+        
+        # The payload should be CBOR-encoded bytes, let's decode it
+        payload_bytes = cbor_data[2]
+        if isinstance(payload_bytes, bytes):
+            payload = cbor2.loads(payload_bytes)
+        else:
+            payload = payload_bytes  # Maybe it's already decoded
+        
+        print(f"Debug: Decoded payload type: {type(payload)}", file=sys.stderr)
+        if isinstance(payload, dict):
+            keys = list(payload.keys())[:10]  # Show first 10 keys
+            print(f"Debug: Payload keys (first 10): {keys}", file=sys.stderr)
+            # Show key types
+            key_types = {k: type(k) for k in keys}
+            print(f"Debug: Key types: {key_types}", file=sys.stderr)
+        
+        # Extract certificates - try both bytes and string keys
+        leaf_der = payload.get(b"certificate") or payload.get("certificate")
+        bundle_ders = payload.get(b"cabundle", []) or payload.get("cabundle", [])
         
         if not leaf_der:
             raise AttestationError("Missing leaf certificate in attestation payload")

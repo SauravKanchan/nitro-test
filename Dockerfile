@@ -8,6 +8,7 @@ RUN yum update -y && \
     python3-pip \
     python3-devel \
     gcc \
+    git \
     openssl-devel \
     libffi-devel \
     && yum clean all \
@@ -18,7 +19,7 @@ RUN python3 -m pip install --upgrade pip setuptools wheel
 
 # Install Python packages required for enclave
 RUN pip3 install --no-cache-dir \
-    aws-nsm-interface>=0.1.0 \
+    git+https://github.com/donkersgoed/aws-nsm-interface.git \
     cryptography>=41.0.0 \
     cbor2>=5.4.0
 

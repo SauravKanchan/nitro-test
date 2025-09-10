@@ -22,35 +22,6 @@ def generate_ephemeral_keypair() -> Tuple[ec.EllipticCurvePrivateKey, bytes]:
     return private_key, public_key_der
 
 
-def test_nsm_basic() -> bool:
-    """Test basic NSM functionality without parameters."""
-    try:
-        print(f"🧪 Testing basic NSM functionality...", file=sys.stderr)
-        sys.stderr.flush()
-        
-        file_desc = aws_nsm_interface.open_nsm_device()
-        print(f"✅ NSM device opened: {file_desc}", file=sys.stderr)
-        sys.stderr.flush()
-        
-        # Try with absolutely minimal parameters
-        result = aws_nsm_interface.get_attestation_doc(file_desc)
-        print(f"✅ Basic attestation successful: {type(result)}", file=sys.stderr)
-        sys.stderr.flush()
-        
-        aws_nsm_interface.close_nsm_device(file_desc)
-        print(f"✅ NSM device closed", file=sys.stderr)
-        sys.stderr.flush()
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Basic NSM test failed: {e}", file=sys.stderr)
-        sys.stderr.flush()
-        import traceback
-        print(f"❌ Traceback: {traceback.format_exc()}", file=sys.stderr)
-        sys.stderr.flush()
-        return False
-
 
 def get_attestation_document(
     user_data: Optional[bytes] = None,
@@ -60,21 +31,8 @@ def get_attestation_document(
     """Request an attestation document from the Nitro Secure Module."""
     file_desc = None
     try:
-        print(f"🔍 Opening NSM device...", file=sys.stderr)
-        sys.stderr.flush()
         # Open NSM device
         file_desc = aws_nsm_interface.open_nsm_device()
-        print(f"✅ NSM device opened, file_desc: {file_desc}", file=sys.stderr)
-        sys.stderr.flush()
-        
-        # Debug parameter info
-        print(f"🔍 Requesting attestation with parameters:", file=sys.stderr)
-        print(f"  user_data: {user_data} (type: {type(user_data)})", file=sys.stderr)
-        print(f"  nonce: {nonce} (type: {type(nonce)})", file=sys.stderr)
-        print(f"  public_key: {public_key is not None} (type: {type(public_key)})", file=sys.stderr)
-        
-        # Try with minimal parameters first to isolate the issue
-        print(f"🔍 Calling aws_nsm_interface.get_attestation_doc...", file=sys.stderr)
         
         # Build parameter dict, excluding None values
         params = {}
@@ -84,47 +42,31 @@ def get_attestation_document(
             params['nonce'] = nonce
         if public_key is not None:
             params['public_key'] = public_key
-            
-        print(f"🔍 Final parameters: {params}", file=sys.stderr)
         
         # Get attestation document
         result = aws_nsm_interface.get_attestation_doc(file_desc, **params)
-        print(f"✅ get_attestation_doc returned: {type(result)}", file=sys.stderr)
         
-        # Check result structure
+        # Extract document from result dict
         if isinstance(result, dict):
-            print(f"🔍 Result keys: {list(result.keys())}", file=sys.stderr)
             if 'document' in result:
                 doc = result['document']
-                print(f"✅ Document extracted, size: {len(doc)} bytes", file=sys.stderr)
             else:
-                print(f"❌ No 'document' key in result", file=sys.stderr)
                 raise ValueError("No 'document' key in attestation result")
         else:
-            print(f"❌ Result is not a dict: {type(result)}", file=sys.stderr)
             doc = result  # Maybe it returns the document directly
         
         # Close NSM device
-        print(f"🔍 Closing NSM device...", file=sys.stderr)
         aws_nsm_interface.close_nsm_device(file_desc)
-        print(f"✅ NSM device closed", file=sys.stderr)
         
         return doc
         
     except Exception as e:
-        print(f"❌ Exception occurred: {e}", file=sys.stderr)
-        print(f"❌ Exception type: {type(e)}", file=sys.stderr)
-        import traceback
-        print(f"❌ Traceback: {traceback.format_exc()}", file=sys.stderr)
-        
         # Ensure we close file descriptor on error
         if file_desc is not None:
             try:
-                print(f"🔍 Attempting to close NSM device on error...", file=sys.stderr)
                 aws_nsm_interface.close_nsm_device(file_desc)
-                print(f"✅ NSM device closed on error", file=sys.stderr)
-            except Exception as close_error:
-                print(f"❌ Error closing NSM device: {close_error}", file=sys.stderr)
+            except:
+                pass
         
         print(f"Error getting attestation document: {e}", file=sys.stderr)
         raise
@@ -245,16 +187,6 @@ def main():
             run_vsock_server(port)
             return
             
-        # Check for NSM test
-        elif command == "--test-nsm":
-            print("🧪 Running NSM basic test...", file=sys.stderr)
-            if test_nsm_basic():
-                print("✅ NSM test passed!", file=sys.stderr)
-            else:
-                print("❌ NSM test failed!", file=sys.stderr)
-                sys.exit(1)
-            return
-            
         # Check for help
         elif command in ["-h", "--help"]:
             print("AWS Nitro Enclave Attestation App", file=sys.stderr)
@@ -267,14 +199,12 @@ def main():
             print("  --daemon                    Run in interactive daemon mode", file=sys.stderr)
             print("  --vsock [port]             Run vsock server (default port: 9000)", file=sys.stderr)
             print("  --vsock-server [port]      Same as --vsock", file=sys.stderr)
-            print("  --test-nsm                 Test basic NSM functionality", file=sys.stderr)
             print("  -h, --help                 Show this help message", file=sys.stderr)
             print("", file=sys.stderr)
             print("Examples:", file=sys.stderr)
             print("  python3 enclave_app.py --generate-key", file=sys.stderr)
             print("  python3 enclave_app.py --daemon", file=sys.stderr)
             print("  python3 enclave_app.py --vsock 9000", file=sys.stderr)
-            print("  python3 enclave_app.py --test-nsm", file=sys.stderr)
             print("  python3 enclave_app.py --generate-key \"my-data\" \"my-nonce\"", file=sys.stderr)
             return
     

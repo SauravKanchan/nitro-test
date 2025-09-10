@@ -130,12 +130,9 @@ class VsockAttestationServer:
                 if isinstance(nonce, str):
                     nonce = nonce.encode('utf-8')
                     
-                print(f"🔐 Generating attestation: user_data={user_data}, nonce={nonce}, key={generate_key}", file=sys.stderr)
-                
                 # Generate ephemeral key if requested
                 public_key_der = None
                 if generate_key:
-                    print("🔑 Generating ephemeral keypair...", file=sys.stderr)
                     private_key, public_key_der = generate_ephemeral_keypair()
                 
                 # Get attestation document
@@ -158,7 +155,6 @@ class VsockAttestationServer:
                     "timestamp": int(time.time() * 1000)
                 }
                 
-                print(f"✅ Attestation generated ({len(doc)} bytes)", file=sys.stderr)
                 return response
                 
             elif command == 'status':
@@ -177,7 +173,6 @@ class VsockAttestationServer:
                 }
                 
         except Exception as e:
-            print(f"❌ Error processing request: {e}", file=sys.stderr)
             return {
                 "success": False,
                 "error": f"Failed to process request: {e}"

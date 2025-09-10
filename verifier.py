@@ -63,78 +63,100 @@ def load_certificates(leaf_der: bytes, bundle_ders: List[bytes]) -> Tuple[Certif
         raise AttestationError(f"Failed to load certificates: {e}")
 
 
+def build_certificate_chain(leaf: Certificate, bundle: List[Certificate], root: Certificate) -> List[Certificate]:
+    """Build the proper certificate chain from leaf to root by matching issuers to subjects."""
+    chain = [leaf]
+    remaining_certs = bundle + [root]
+    current_cert = leaf
+    
+    print(f"Debug: Building chain starting from leaf: {leaf.subject}", file=sys.stderr)
+    
+    while True:
+        # Find the issuer of the current certificate
+        next_cert = None
+        for cert in remaining_certs:
+            if cert.subject == current_cert.issuer:
+                next_cert = cert
+                break
+        
+        if next_cert is None:
+            print(f"Debug: Could not find issuer for: {current_cert.issuer}", file=sys.stderr)
+            break
+            
+        chain.append(next_cert)
+        remaining_certs.remove(next_cert)
+        current_cert = next_cert
+        
+        print(f"Debug: Added to chain: {next_cert.subject}", file=sys.stderr)
+        
+        # Stop if we've reached the root (self-signed)
+        if next_cert.subject == next_cert.issuer:
+            print("Debug: Reached self-signed root certificate", file=sys.stderr)
+            break
+    
+    print(f"Debug: Built chain with {len(chain)} certificates", file=sys.stderr)
+    return chain
+
+
+def verify_certificate_signature(cert: Certificate, issuer_cert: Certificate) -> None:
+    """Verify that cert is signed by issuer_cert."""
+    issuer_public_key = issuer_cert.public_key()
+    
+    print(f"Debug: Verifying {cert.subject} signed by {issuer_cert.subject}", file=sys.stderr)
+    
+    # Try the certificate's declared algorithm first
+    try:
+        issuer_public_key.verify(
+            cert.signature,
+            cert.tbs_certificate_bytes,
+            cert.signature_hash_algorithm
+        )
+        print("Debug: Verification successful with declared algorithm", file=sys.stderr)
+    except Exception as e1:
+        print(f"Debug: Declared algorithm failed: {e1}", file=sys.stderr)
+        
+        # For AWS Nitro certificates, try ECDSA with SHA384 explicitly
+        if isinstance(issuer_public_key, ec.EllipticCurvePublicKey):
+            try:
+                issuer_public_key.verify(
+                    cert.signature,
+                    cert.tbs_certificate_bytes,
+                    ec.ECDSA(hashes.SHA384())
+                )
+                print("Debug: Verification successful with ECDSA-SHA384", file=sys.stderr)
+            except Exception as e2:
+                print(f"Debug: ECDSA-SHA384 failed: {e2}", file=sys.stderr)
+                raise e2
+        else:
+            raise e1
+
+
 def verify_certificate_chain(leaf: Certificate, bundle: List[Certificate], root: Certificate):
     """Verify the certificate chain from leaf to root."""
     try:
-        # Basic time validity check for leaf
+        # Build the proper certificate chain
+        chain = build_certificate_chain(leaf, bundle, root)
+        
+        if len(chain) < 2:
+            raise AttestationError("Certificate chain too short - need at least leaf and issuer")
+        
+        # Check time validity for all certificates
         now = datetime.datetime.now(datetime.timezone.utc)
-        if not (leaf.not_valid_before_utc <= now <= leaf.not_valid_after_utc):
-            raise AttestationError(f"Leaf certificate not currently valid. Valid from {leaf.not_valid_before_utc} to {leaf.not_valid_after_utc}, current time: {now}")
+        for i, cert in enumerate(chain):
+            if not (cert.not_valid_before_utc <= now <= cert.not_valid_after_utc):
+                cert_type = "leaf" if i == 0 else f"intermediate[{i-1}]" if i < len(chain)-1 else "root"
+                raise AttestationError(f"{cert_type} certificate not currently valid. Valid from {cert.not_valid_before_utc} to {cert.not_valid_after_utc}, current time: {now}")
         
-        # Verify leaf is signed by first intermediate or root
-        issuer = bundle[0] if bundle else root
-        issuer_public_key = issuer.public_key()
-        
-        try:
-            print(f"Debug: Verifying leaf cert with issuer: {issuer.subject}", file=sys.stderr)
-            print(f"Debug: Issuer public key type: {type(issuer_public_key)}", file=sys.stderr)
-            
-            # Try the certificate's declared algorithm first
-            try:
-                issuer_public_key.verify(
-                    leaf.signature,
-                    leaf.tbs_certificate_bytes,
-                    leaf.signature_hash_algorithm
-                )
-                print("Debug: Verification successful with declared algorithm", file=sys.stderr)
-            except Exception as e1:
-                print(f"Debug: Declared algorithm failed: {e1}", file=sys.stderr)
-                
-                # For AWS Nitro certificates, try ECDSA with SHA384 explicitly
-                if isinstance(issuer_public_key, ec.EllipticCurvePublicKey):
-                    try:
-                        issuer_public_key.verify(
-                            leaf.signature,
-                            leaf.tbs_certificate_bytes,
-                            ec.ECDSA(hashes.SHA384())
-                        )
-                        print("Debug: Verification successful with ECDSA-SHA384", file=sys.stderr)
-                    except Exception as e2:
-                        print(f"Debug: ECDSA-SHA384 failed: {e2}", file=sys.stderr)
-                        raise e2
-                else:
-                    raise e1
-                    
-        except Exception as e:
-            raise AttestationError(f"Leaf certificate signature verification failed: {e}")
-        
-        # Verify intermediate chain to root
-        for i in range(len(bundle)):
-            current = bundle[i]
-            next_issuer = bundle[i + 1] if i + 1 < len(bundle) else root
-            
-            # Check validity
-            if not (current.not_valid_before_utc <= now <= current.not_valid_after_utc):
-                raise AttestationError(f"Intermediate certificate {i} not currently valid")
+        # Verify each certificate against its issuer
+        for i in range(len(chain) - 1):
+            cert = chain[i]
+            issuer_cert = chain[i + 1]
             
             try:
-                next_issuer_public_key = next_issuer.public_key()
-                # For AWS Nitro certificates, use ECDSA with SHA384 explicitly
-                if isinstance(next_issuer_public_key, ec.EllipticCurvePublicKey):
-                    next_issuer_public_key.verify(
-                        current.signature,
-                        current.tbs_certificate_bytes,
-                        ec.ECDSA(hashes.SHA384())
-                    )
-                else:
-                    # Fallback to the certificate's declared algorithm
-                    next_issuer_public_key.verify(
-                        current.signature,
-                        current.tbs_certificate_bytes,
-                        current.signature_hash_algorithm
-                    )
+                verify_certificate_signature(cert, issuer_cert)
             except Exception as e:
-                raise AttestationError(f"Intermediate certificate {i} signature verification failed: {e}")
+                cert_type = "leaf" if i == 0 else f"intermediate[{i-1}]"
+                raise AttestationError(f"{cert_type} certificate signature verification failed: {e}")
                 
     except AttestationError:
         raise

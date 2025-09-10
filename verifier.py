@@ -100,7 +100,54 @@ def verify_certificate_chain(leaf: Certificate, bundle: List[Certificate], root:
 def verify_cose_signature(cose_bytes: bytes, leaf_cert: Certificate) -> bytes:
     """Verify COSE signature using leaf certificate public key."""
     try:
-        msg = Sign1Message.decode(cose_bytes)
+        # First, let's examine the raw CBOR structure
+        try:
+            raw_cbor = cbor2.loads(cose_bytes)
+            print(f"Debug: Raw CBOR structure type: {type(raw_cbor)}", file=sys.stderr)
+            if isinstance(raw_cbor, list):
+                print(f"Debug: CBOR array length: {len(raw_cbor)}", file=sys.stderr)
+        except Exception as e:
+            print(f"Debug: Failed to parse as raw CBOR: {e}", file=sys.stderr)
+        
+        # Try different approaches to parse COSE
+        msg = None
+        
+        # Approach 1: Try direct decode
+        try:
+            msg = Sign1Message.decode(cose_bytes)
+            print("Debug: Successfully parsed with direct decode", file=sys.stderr)
+        except Exception as e:
+            print(f"Debug: Direct decode failed: {e}", file=sys.stderr)
+        
+        # Approach 2: Try parsing without expecting tags
+        if msg is None:
+            try:
+                msg = Sign1Message()
+                msg.decode(cose_bytes, tag=False)
+                print("Debug: Successfully parsed without tags", file=sys.stderr)
+            except Exception as e:
+                print(f"Debug: Tagless decode failed: {e}", file=sys.stderr)
+        
+        # Approach 3: Try manual construction from CBOR
+        if msg is None:
+            try:
+                cbor_data = cbor2.loads(cose_bytes)
+                if isinstance(cbor_data, list) and len(cbor_data) == 4:
+                    # COSE_Sign1 structure: [protected, unprotected, payload, signature]
+                    msg = Sign1Message()
+                    msg.phdr = cbor2.loads(cbor_data[0]) if cbor_data[0] else {}
+                    msg.uhdr = cbor_data[1] if cbor_data[1] else {}
+                    msg.payload = cbor_data[2]
+                    msg.signature = cbor_data[3]
+                    print("Debug: Manually constructed COSE message", file=sys.stderr)
+                else:
+                    raise AttestationError(f"Unexpected CBOR structure: {type(cbor_data)} with length {len(cbor_data) if hasattr(cbor_data, '__len__') else 'unknown'}")
+            except Exception as e:
+                print(f"Debug: Manual construction failed: {e}", file=sys.stderr)
+                raise AttestationError(f"Failed to parse COSE message with all methods: {e}")
+        
+        if msg is None:
+            raise AttestationError("Could not parse COSE message with any method")
         
         # Check algorithm is ES384
         alg = msg.phdr.get(1)  # Algorithm parameter

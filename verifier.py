@@ -44,6 +44,20 @@ def load_certificates(leaf_der: bytes, bundle_ders: List[bytes]) -> Tuple[Certif
         leaf = x509.load_der_x509_certificate(leaf_der)
         bundle = [x509.load_der_x509_certificate(der) for der in bundle_ders]
         root = x509.load_pem_x509_certificate(TRUSTED_ROOT_PEM.encode())
+        
+        # Debug: Print certificate info
+        print(f"Debug: Leaf certificate subject: {leaf.subject}", file=sys.stderr)
+        print(f"Debug: Leaf certificate issuer: {leaf.issuer}", file=sys.stderr)
+        print(f"Debug: Leaf signature algorithm: {leaf.signature_algorithm_oid._name}", file=sys.stderr)
+        print(f"Debug: Bundle certificates count: {len(bundle)}", file=sys.stderr)
+        
+        for i, cert in enumerate(bundle):
+            print(f"Debug: Bundle[{i}] subject: {cert.subject}", file=sys.stderr)
+            print(f"Debug: Bundle[{i}] issuer: {cert.issuer}", file=sys.stderr)
+            print(f"Debug: Bundle[{i}] signature algorithm: {cert.signature_algorithm_oid._name}", file=sys.stderr)
+        
+        print(f"Debug: Root certificate subject: {root.subject}", file=sys.stderr)
+        
         return leaf, bundle, root
     except Exception as e:
         raise AttestationError(f"Failed to load certificates: {e}")
@@ -62,21 +76,35 @@ def verify_certificate_chain(leaf: Certificate, bundle: List[Certificate], root:
         issuer_public_key = issuer.public_key()
         
         try:
-            # For AWS Nitro certificates, use ECDSA with SHA384 explicitly
-            # The signature_hash_algorithm might not be properly detected
-            if isinstance(issuer_public_key, ec.EllipticCurvePublicKey):
-                issuer_public_key.verify(
-                    leaf.signature,
-                    leaf.tbs_certificate_bytes,
-                    ec.ECDSA(hashes.SHA384())
-                )
-            else:
-                # Fallback to the certificate's declared algorithm
+            print(f"Debug: Verifying leaf cert with issuer: {issuer.subject}", file=sys.stderr)
+            print(f"Debug: Issuer public key type: {type(issuer_public_key)}", file=sys.stderr)
+            
+            # Try the certificate's declared algorithm first
+            try:
                 issuer_public_key.verify(
                     leaf.signature,
                     leaf.tbs_certificate_bytes,
                     leaf.signature_hash_algorithm
                 )
+                print("Debug: Verification successful with declared algorithm", file=sys.stderr)
+            except Exception as e1:
+                print(f"Debug: Declared algorithm failed: {e1}", file=sys.stderr)
+                
+                # For AWS Nitro certificates, try ECDSA with SHA384 explicitly
+                if isinstance(issuer_public_key, ec.EllipticCurvePublicKey):
+                    try:
+                        issuer_public_key.verify(
+                            leaf.signature,
+                            leaf.tbs_certificate_bytes,
+                            ec.ECDSA(hashes.SHA384())
+                        )
+                        print("Debug: Verification successful with ECDSA-SHA384", file=sys.stderr)
+                    except Exception as e2:
+                        print(f"Debug: ECDSA-SHA384 failed: {e2}", file=sys.stderr)
+                        raise e2
+                else:
+                    raise e1
+                    
         except Exception as e:
             raise AttestationError(f"Leaf certificate signature verification failed: {e}")
         

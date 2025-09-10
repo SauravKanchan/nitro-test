@@ -60,7 +60,7 @@ nitro-cli describe-eif --eif-path "${EIF_NAME}"
 
 echo ""
 echo "🚀 Starting enclave automatically..."
-nitro-cli run-enclave --cpu-count 2 --memory 1920 --eif-path ${EIF_NAME} --debug-mode
+nitro-cli run-enclave --cpu-count 2 --memory 2400 --eif-path ${EIF_NAME} --debug-mode
 
 echo ""
 echo "✅ Enclave started successfully!"

@@ -219,60 +219,110 @@ def verify_cose_signature(cose_bytes: bytes, leaf_cert: Certificate, bundle: Lis
         print(f"Debug: Signature bytes hex (first 32 bytes): {signature_bytes[:32].hex()}", file=sys.stderr)
         print(f"Debug: Signature bytes hex (last 32 bytes): {signature_bytes[-32:].hex()}", file=sys.stderr)
         
+        # Analyze ECDSA signature format for P-384 (should be 96 bytes: 48-byte r + 48-byte s)
+        if len(signature_bytes) == 96:
+            r_bytes = signature_bytes[:48]
+            s_bytes = signature_bytes[48:]
+            print(f"Debug: ECDSA signature appears to be raw format (r={r_bytes.hex()[:16]}..., s={s_bytes.hex()[:16]}...)", file=sys.stderr)
+        else:
+            print(f"Debug: Unexpected signature length: {len(signature_bytes)} bytes (expected 96 for P-384 raw or variable for DER)", file=sys.stderr)
+        
         # Try systematic COSE verification with different certificates
         # AWS Nitro attestation documents are signed by NSM, need to find the right certificate
         verification_successful = False
         attempted_certs = []
         
-        # Try leaf certificate first
+        # Try leaf certificate first with enhanced verification
         print("Debug: Attempting COSE signature verification with leaf certificate...", file=sys.stderr)
         try:
             pub_key = leaf_cert.public_key()
             if isinstance(pub_key, ec.EllipticCurvePublicKey) and pub_key.curve.name == "secp384r1":
-                pub_key.verify(signature_bytes, sig_structure_bytes, ec.ECDSA(hashes.SHA384()))
-                print("Debug: ECDSA signature verification successful with leaf certificate!", file=sys.stderr)
-                verification_successful = True
+                # Try direct verification first
+                try:
+                    pub_key.verify(signature_bytes, sig_structure_bytes, ec.ECDSA(hashes.SHA384()))
+                    print("Debug: ECDSA signature verification successful with leaf certificate!", file=sys.stderr)
+                    verification_successful = True
+                except Exception as e1:
+                    print(f"Debug: Direct signature verification failed: {type(e1).__name__}: {e1}", file=sys.stderr)
+                    
+                    # If signature is 96 bytes, try converting from raw format to DER
+                    if len(signature_bytes) == 96 and not verification_successful:
+                        try:
+                            from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+                            r_int = int.from_bytes(signature_bytes[:48], 'big')
+                            s_int = int.from_bytes(signature_bytes[48:], 'big')
+                            der_signature = encode_dss_signature(r_int, s_int)
+                            print(f"Debug: Trying DER-encoded signature (length {len(der_signature)})", file=sys.stderr)
+                            pub_key.verify(der_signature, sig_structure_bytes, ec.ECDSA(hashes.SHA384()))
+                            print("Debug: ECDSA signature verification successful with DER encoding!", file=sys.stderr)
+                            verification_successful = True
+                        except Exception as e2:
+                            print(f"Debug: DER signature verification failed: {type(e2).__name__}: {e2}", file=sys.stderr)
+                            attempted_certs.append(f"leaf: raw={e1}, der={e2}")
+                    else:
+                        attempted_certs.append(f"leaf: {e1}")
             else:
-                print(f"Debug: Leaf certificate has unsupported key type or curve", file=sys.stderr)
+                print(f"Debug: Leaf certificate has unsupported key type or curve: {type(pub_key)}, {getattr(pub_key, 'curve', 'N/A')}", file=sys.stderr)
         except Exception as e:
-            print(f"Debug: Leaf certificate verification failed: {e}", file=sys.stderr)
-            attempted_certs.append(f"leaf: {e}")
+            print(f"Debug: Leaf certificate loading failed: {e}", file=sys.stderr)
+            attempted_certs.append(f"leaf_load: {e}")
         
-        # If leaf certificate fails, try certificates from bundle
+        # Helper function to try verification with both raw and DER signature formats
+        def try_verify_with_formats(cert, cert_name):
+            pub_key = cert.public_key()
+            if not isinstance(pub_key, ec.EllipticCurvePublicKey) or pub_key.curve.name != "secp384r1":
+                return False, f"{cert_name}: unsupported key/curve"
+            
+            # Try raw signature first
+            try:
+                pub_key.verify(signature_bytes, sig_structure_bytes, ec.ECDSA(hashes.SHA384()))
+                print(f"Debug: ECDSA verification successful with {cert_name} (raw signature)!", file=sys.stderr)
+                return True, None
+            except Exception as e1:
+                # Try DER format if signature is 96 bytes
+                if len(signature_bytes) == 96:
+                    try:
+                        from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+                        r_int = int.from_bytes(signature_bytes[:48], 'big')
+                        s_int = int.from_bytes(signature_bytes[48:], 'big')
+                        der_signature = encode_dss_signature(r_int, s_int)
+                        pub_key.verify(der_signature, sig_structure_bytes, ec.ECDSA(hashes.SHA384()))
+                        print(f"Debug: ECDSA verification successful with {cert_name} (DER signature)!", file=sys.stderr)
+                        return True, None
+                    except Exception as e2:
+                        return False, f"{cert_name}: raw={e1}, der={e2}"
+                else:
+                    return False, f"{cert_name}: {e1}"
+        
+        # Try bundle certificates if leaf failed
         if not verification_successful:
             for i, cert in enumerate(bundle):
                 print(f"Debug: Attempting COSE signature verification with bundle certificate {i}...", file=sys.stderr)
                 try:
-                    pub_key = cert.public_key()
-                    if isinstance(pub_key, ec.EllipticCurvePublicKey) and pub_key.curve.name == "secp384r1":
-                        pub_key.verify(signature_bytes, sig_structure_bytes, ec.ECDSA(hashes.SHA384()))
-                        print(f"Debug: ECDSA signature verification successful with bundle certificate {i}!", file=sys.stderr)
+                    success, error = try_verify_with_formats(cert, f"bundle[{i}]")
+                    if success:
                         verification_successful = True
                         break
                     else:
-                        print(f"Debug: Bundle certificate {i} has unsupported key type or curve", file=sys.stderr)
+                        attempted_certs.append(error)
                 except Exception as e:
-                    print(f"Debug: Bundle certificate {i} verification failed: {e}", file=sys.stderr)
                     attempted_certs.append(f"bundle[{i}]: {e}")
         
-        # If all bundle certificates fail, try root certificate
+        # Try root certificate if all else failed
         if not verification_successful:
             print("Debug: Attempting COSE signature verification with root certificate...", file=sys.stderr)
             try:
-                pub_key = root.public_key()
-                if isinstance(pub_key, ec.EllipticCurvePublicKey) and pub_key.curve.name == "secp384r1":
-                    pub_key.verify(signature_bytes, sig_structure_bytes, ec.ECDSA(hashes.SHA384()))
-                    print("Debug: ECDSA signature verification successful with root certificate!", file=sys.stderr)
+                success, error = try_verify_with_formats(root, "root")
+                if success:
                     verification_successful = True
                 else:
-                    print(f"Debug: Root certificate has unsupported key type or curve", file=sys.stderr)
+                    attempted_certs.append(error)
             except Exception as e:
-                print(f"Debug: Root certificate verification failed: {e}", file=sys.stderr)
                 attempted_certs.append(f"root: {e}")
         
         if not verification_successful:
             print(f"Debug: All attempted certificates failed: {attempted_certs}", file=sys.stderr)
-            raise AttestationError(f"COSE signature verification failed with all attempted certificates. Tried {len(attempted_certs) + 1} certificates.")
+            raise AttestationError(f"COSE signature verification failed with all attempted certificates. Errors: {attempted_certs[:3]}...")
             
         return payload
         

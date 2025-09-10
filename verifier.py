@@ -13,9 +13,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.base import Certificate
-from cose.messages import Sign1Message
-from cose.keys import CoseKey
-from cose.algorithms import Es384
+# COSE library imports removed - using manual CBOR parsing instead
 
 
 # AWS Nitro Root Certificate (keep updated from AWS documentation)
@@ -98,63 +96,32 @@ def verify_certificate_chain(leaf: Certificate, bundle: List[Certificate], root:
 
 
 def verify_cose_signature(cose_bytes: bytes, leaf_cert: Certificate) -> bytes:
-    """Verify COSE signature using leaf certificate public key."""
+    """Verify COSE signature using manual CBOR parsing and cryptography library."""
     try:
-        # First, let's examine the raw CBOR structure
-        try:
-            raw_cbor = cbor2.loads(cose_bytes)
-            print(f"Debug: Raw CBOR structure type: {type(raw_cbor)}", file=sys.stderr)
-            if isinstance(raw_cbor, list):
-                print(f"Debug: CBOR array length: {len(raw_cbor)}", file=sys.stderr)
-        except Exception as e:
-            print(f"Debug: Failed to parse as raw CBOR: {e}", file=sys.stderr)
+        # Parse the raw CBOR array (AWS NSM returns untagged COSE_Sign1)
+        cbor_data = cbor2.loads(cose_bytes)
         
-        # Try different approaches to parse COSE
-        msg = None
+        if not isinstance(cbor_data, list) or len(cbor_data) != 4:
+            raise AttestationError(f"Invalid COSE_Sign1 structure: expected 4-element array, got {type(cbor_data)} with length {len(cbor_data) if hasattr(cbor_data, '__len__') else 'unknown'}")
         
-        # Approach 1: Try direct decode
-        try:
-            msg = Sign1Message.decode(cose_bytes)
-            print("Debug: Successfully parsed with direct decode", file=sys.stderr)
-        except Exception as e:
-            print(f"Debug: Direct decode failed: {e}", file=sys.stderr)
+        # Extract COSE_Sign1 components
+        protected_bytes = cbor_data[0]  # Protected headers (CBOR-encoded)
+        # cbor_data[1] is unprotected headers (not used for signature verification)
+        payload = cbor_data[2]          # Payload (attestation data)
+        signature_bytes = cbor_data[3]  # Signature
         
-        # Approach 2: Try parsing without expecting tags
-        if msg is None:
-            try:
-                msg = Sign1Message()
-                msg.decode(cose_bytes, tag=False)
-                print("Debug: Successfully parsed without tags", file=sys.stderr)
-            except Exception as e:
-                print(f"Debug: Tagless decode failed: {e}", file=sys.stderr)
+        # Parse protected headers
+        if protected_bytes:
+            protected = cbor2.loads(protected_bytes)
+        else:
+            protected = {}
         
-        # Approach 3: Try manual construction from CBOR
-        if msg is None:
-            try:
-                cbor_data = cbor2.loads(cose_bytes)
-                if isinstance(cbor_data, list) and len(cbor_data) == 4:
-                    # COSE_Sign1 structure: [protected, unprotected, payload, signature]
-                    msg = Sign1Message()
-                    msg.phdr = cbor2.loads(cbor_data[0]) if cbor_data[0] else {}
-                    msg.uhdr = cbor_data[1] if cbor_data[1] else {}
-                    msg.payload = cbor_data[2]
-                    msg.signature = cbor_data[3]
-                    print("Debug: Manually constructed COSE message", file=sys.stderr)
-                else:
-                    raise AttestationError(f"Unexpected CBOR structure: {type(cbor_data)} with length {len(cbor_data) if hasattr(cbor_data, '__len__') else 'unknown'}")
-            except Exception as e:
-                print(f"Debug: Manual construction failed: {e}", file=sys.stderr)
-                raise AttestationError(f"Failed to parse COSE message with all methods: {e}")
+        # Verify algorithm is ES384 (ECDSA P-384 with SHA-384)
+        alg = protected.get(1)  # Algorithm parameter (key 1 in COSE)
+        if alg != -35:  # ES384 algorithm identifier
+            raise AttestationError(f"Unexpected COSE algorithm: {alg}, expected ES384 (-35)")
         
-        if msg is None:
-            raise AttestationError("Could not parse COSE message with any method")
-        
-        # Check algorithm is ES384
-        alg = msg.phdr.get(1)  # Algorithm parameter
-        if alg != Es384.identifier:
-            raise AttestationError(f"Unexpected COSE algorithm: {alg}, expected ES384 ({Es384.identifier})")
-        
-        # Get public key from leaf certificate
+        # Get public key from leaf certificate and validate
         pub_key = leaf_cert.public_key()
         if not isinstance(pub_key, ec.EllipticCurvePublicKey):
             raise AttestationError("Leaf certificate does not contain an EC public key")
@@ -162,14 +129,37 @@ def verify_cose_signature(cose_bytes: bytes, leaf_cert: Certificate) -> bytes:
         if pub_key.curve.name != "secp384r1":
             raise AttestationError(f"Unexpected curve: {pub_key.curve.name}, expected secp384r1")
         
-        # Convert to COSE key and verify
-        cose_key = CoseKey.from_cryptography_key(pub_key)
-        msg.key = cose_key
+        # Build Sig_structure as per COSE RFC 8152 Section 4.4
+        # Sig_structure = [
+        #     context,           // "Signature1" for COSE_Sign1
+        #     body_protected,    // Protected headers
+        #     external_aad,      // Empty for attestation documents
+        #     payload            // The payload being signed
+        # ]
+        context = "Signature1"
+        external_aad = b""  # Empty for attestation documents
         
-        if not msg.verify_signature():
-            raise AttestationError("COSE signature verification failed")
+        sig_structure = [
+            context,
+            protected_bytes if protected_bytes else b"",
+            external_aad,
+            payload
+        ]
+        
+        # Encode Sig_structure as CBOR
+        sig_structure_bytes = cbor2.dumps(sig_structure)
+        
+        # Verify signature using ECDSA P-384 with SHA-384
+        try:
+            pub_key.verify(
+                signature_bytes,
+                sig_structure_bytes,
+                ec.ECDSA(hashes.SHA384())
+            )
+        except Exception as e:
+            raise AttestationError(f"ECDSA signature verification failed: {e}")
             
-        return msg.payload
+        return payload
         
     except AttestationError:
         raise
@@ -219,9 +209,11 @@ def verify_attestation_document(
         # Decode from base64
         cose_bytes = base64.b64decode(b64_doc.strip())
         
-        # Parse COSE message to extract certificates
-        msg = Sign1Message.decode(cose_bytes)
-        payload = cbor2.loads(msg.payload)
+        # Parse CBOR array to extract certificates from payload
+        cbor_data = cbor2.loads(cose_bytes)
+        if not isinstance(cbor_data, list) or len(cbor_data) != 4:
+            raise AttestationError("Invalid attestation document structure")
+        payload = cbor2.loads(cbor_data[2])  # Payload is at index 2
         
         # Extract certificates
         leaf_der = payload.get(b"certificate")

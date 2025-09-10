@@ -164,7 +164,7 @@ def verify_certificate_chain(leaf: Certificate, bundle: List[Certificate], root:
         raise AttestationError(f"Certificate chain verification failed: {e}")
 
 
-def verify_cose_signature(cose_bytes: bytes, leaf_cert: Certificate) -> bytes:
+def verify_cose_signature(cose_bytes: bytes, leaf_cert: Certificate, bundle: List[Certificate], root: Certificate) -> bytes:
     """Verify COSE signature using manual CBOR parsing and cryptography library."""
     try:
         # Parse the raw CBOR array (AWS NSM returns untagged COSE_Sign1)
@@ -195,16 +195,6 @@ def verify_cose_signature(cose_bytes: bytes, leaf_cert: Certificate) -> bytes:
         if alg != -35:  # ES384 algorithm identifier
             raise AttestationError(f"Unexpected COSE algorithm: {alg}, expected ES384 (-35)")
         
-        # Get public key from leaf certificate and validate
-        pub_key = leaf_cert.public_key()
-        if not isinstance(pub_key, ec.EllipticCurvePublicKey):
-            raise AttestationError("Leaf certificate does not contain an EC public key")
-        
-        if pub_key.curve.name != "secp384r1":
-            raise AttestationError(f"Unexpected curve: {pub_key.curve.name}, expected secp384r1")
-        
-        print(f"Debug: Using public key from leaf cert: {pub_key.curve.name}", file=sys.stderr)
-        
         # Build Sig_structure as per COSE RFC 8152 Section 4.4
         # Sig_structure = [
         #     context,           // "Signature1" for COSE_Sign1
@@ -229,19 +219,60 @@ def verify_cose_signature(cose_bytes: bytes, leaf_cert: Certificate) -> bytes:
         print(f"Debug: Signature bytes hex (first 32 bytes): {signature_bytes[:32].hex()}", file=sys.stderr)
         print(f"Debug: Signature bytes hex (last 32 bytes): {signature_bytes[-32:].hex()}", file=sys.stderr)
         
-        # Verify signature using ECDSA P-384 with SHA-384
+        # Try systematic COSE verification with different certificates
+        # AWS Nitro attestation documents are signed by NSM, need to find the right certificate
+        verification_successful = False
+        attempted_certs = []
+        
+        # Try leaf certificate first
+        print("Debug: Attempting COSE signature verification with leaf certificate...", file=sys.stderr)
         try:
-            print("Debug: Attempting ECDSA signature verification...", file=sys.stderr)
-            pub_key.verify(
-                signature_bytes,
-                sig_structure_bytes,
-                ec.ECDSA(hashes.SHA384())
-            )
-            print("Debug: ECDSA signature verification successful!", file=sys.stderr)
+            pub_key = leaf_cert.public_key()
+            if isinstance(pub_key, ec.EllipticCurvePublicKey) and pub_key.curve.name == "secp384r1":
+                pub_key.verify(signature_bytes, sig_structure_bytes, ec.ECDSA(hashes.SHA384()))
+                print("Debug: ECDSA signature verification successful with leaf certificate!", file=sys.stderr)
+                verification_successful = True
+            else:
+                print(f"Debug: Leaf certificate has unsupported key type or curve", file=sys.stderr)
         except Exception as e:
-            print(f"Debug: ECDSA signature verification failed: {e}", file=sys.stderr)
-            print(f"Debug: Exception type: {type(e)}", file=sys.stderr)
-            raise AttestationError(f"ECDSA signature verification failed: {e}")
+            print(f"Debug: Leaf certificate verification failed: {e}", file=sys.stderr)
+            attempted_certs.append(f"leaf: {e}")
+        
+        # If leaf certificate fails, try certificates from bundle
+        if not verification_successful:
+            for i, cert in enumerate(bundle):
+                print(f"Debug: Attempting COSE signature verification with bundle certificate {i}...", file=sys.stderr)
+                try:
+                    pub_key = cert.public_key()
+                    if isinstance(pub_key, ec.EllipticCurvePublicKey) and pub_key.curve.name == "secp384r1":
+                        pub_key.verify(signature_bytes, sig_structure_bytes, ec.ECDSA(hashes.SHA384()))
+                        print(f"Debug: ECDSA signature verification successful with bundle certificate {i}!", file=sys.stderr)
+                        verification_successful = True
+                        break
+                    else:
+                        print(f"Debug: Bundle certificate {i} has unsupported key type or curve", file=sys.stderr)
+                except Exception as e:
+                    print(f"Debug: Bundle certificate {i} verification failed: {e}", file=sys.stderr)
+                    attempted_certs.append(f"bundle[{i}]: {e}")
+        
+        # If all bundle certificates fail, try root certificate
+        if not verification_successful:
+            print("Debug: Attempting COSE signature verification with root certificate...", file=sys.stderr)
+            try:
+                pub_key = root.public_key()
+                if isinstance(pub_key, ec.EllipticCurvePublicKey) and pub_key.curve.name == "secp384r1":
+                    pub_key.verify(signature_bytes, sig_structure_bytes, ec.ECDSA(hashes.SHA384()))
+                    print("Debug: ECDSA signature verification successful with root certificate!", file=sys.stderr)
+                    verification_successful = True
+                else:
+                    print(f"Debug: Root certificate has unsupported key type or curve", file=sys.stderr)
+            except Exception as e:
+                print(f"Debug: Root certificate verification failed: {e}", file=sys.stderr)
+                attempted_certs.append(f"root: {e}")
+        
+        if not verification_successful:
+            print(f"Debug: All attempted certificates failed: {attempted_certs}", file=sys.stderr)
+            raise AttestationError(f"COSE signature verification failed with all attempted certificates. Tried {len(attempted_certs) + 1} certificates.")
             
         return payload
         
@@ -341,7 +372,7 @@ def verify_attestation_document(
         verify_certificate_chain(leaf, bundle, root)
         
         # Verify COSE signature
-        verified_payload_bytes = verify_cose_signature(cose_bytes, leaf)
+        verified_payload_bytes = verify_cose_signature(cose_bytes, leaf, bundle, root)
         verified_payload = parse_payload(verified_payload_bytes)
         
         # Verify timestamp freshness

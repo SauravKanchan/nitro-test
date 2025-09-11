@@ -256,7 +256,7 @@ def verify_attestation_document(
             payload = cbor2.loads(payload_bytes)
         else:
             payload = payload_bytes  # Maybe it's already decoded
-        
+        print(payload) 
         # Extract certificates from payload
         leaf_cert_data = payload.get("certificate")
         bundle_cert_data = payload.get("cabundle", [])
